@@ -1,0 +1,4 @@
+venv
+*.log
+*.sh
+*.ini
