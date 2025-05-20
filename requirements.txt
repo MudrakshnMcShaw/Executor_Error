@@ -1,0 +1,7 @@
+aioredis==2.0.1
+async-timeout==5.0.1
+dnspython==2.6.1
+motor==3.6.1
+pymongo==4.9.2
+redis==5.2.1
+typing-extensions==4.13.2

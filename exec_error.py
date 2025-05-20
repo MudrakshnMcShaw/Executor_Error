@@ -240,6 +240,7 @@ class ExecErrorProcessor:
         async with self.processing_semaphore:
             try:
                 await self.logger.info(f"Processing error: {error_data}")
+                
                 if 'order_data' in error_data:
                     message = error_data['message']
                     order_data = json.loads(error_data['order_data'])
@@ -249,12 +250,37 @@ class ExecErrorProcessor:
                     await self.send_alarm(order_data,message)
                     await self.stream_redis.xack(self.error_stream, self.consumer_group, message_id)
                     await self.logger.info(f"Processed error: {message} for order: {order_data}")
+                
                 elif 'pending_order' in error_data:
                     message = error_data['message'] 
                     pending_data = json.loads(error_data['pending_order'])
                     await self.logger.info(f'Error from Executor_Client: {message} in pending order : {pending_data}')
                     await self.stream_redis.xack(self.error_stream, self.consumer_group, message_id)
                     await self.logger.info(f"Processed error: {message} for pending order: {pending_data}")
+                
+                elif 'AlgoSignalValidationError' in error_data:
+                    message = error_data['message']
+                    order_data:dict = json.loads(error_data['algo_signal'])
+                    client_action_map:dict = await self.stream_redis.hgetall(f'client_action_map: {order_data["algoName"]}')
+                    await self.logger.info(f'Error from Executor_RMS: {message} in signal : {order_data}')
+                    for client_id, status in client_action_map.items():
+                        if status == '1':
+                            temp_order_data = order_data.copy()
+                            temp_order_data['clientID'] = client_id
+                            await self.close_exec_gate(order_data)
+                            await self.log_error_order(order_data, message)
+                    await self.stream_redis.xack(self.error_stream, self.consumer_group, message_id)
+                    await self.logger.info(f"Processed error: {message} for signal: {order_data}")
+                
+                elif 'ClientOrderValidationError' in error_data:
+                    message = error_data['message']
+                    order_data = json.loads(error_data['client_order'])
+                    await self.logger.info(f'Error from Executor_RMS: {message} in order : {order_data}')
+                    await self.close_exec_gate(order_data)
+                    await self.log_error_order(order_data, message)
+                    await self.send_alarm(order_data,message)
+                    await self.stream_redis.xack(self.error_stream, self.consumer_group, message_id)
+                    await self.logger.info(f"Processed error: {message} for order: {order_data}")
             
             except Exception as e: 
                 await self.logger.exception(f"Error processing message {message_id}: {str(e)}")
