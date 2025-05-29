@@ -12,7 +12,10 @@ import datetime
 import time
 from secrets import token_hex
 import random
+import uvloop
 
+# Use uvloop for better performance
+asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 
 class ExecErrorProcessor:
     """
@@ -107,6 +110,7 @@ class ExecErrorProcessor:
         self.sym_redis = await self.get_redis_conn(db=0)
         self.master_redis = await self.get_redis_conn(db=11)
         self.stream_redis = await self.get_redis_conn(db=12, key='infraParams')
+        self.algo_redis = await self.get_redis_conn(db=8, key='infraParams')
         self.ping_redis = await self.get_redis_conn(db=9, key='infraParams')
 
         self.logger = RedisStreamLogger(self.stream_redis, self.logging_stream)
@@ -115,7 +119,7 @@ class ExecErrorProcessor:
         self.db_mongo_client = await self.get_mongo_conn()
         self.orders_db = self.db_mongo_client['symphonyorder_raw'][f'orders_{str(datetime.date.today())}']
         self.response_db = self.db_mongo_client['final_response'][f'final_response_{str(datetime.date.today())}']
-        
+        self.firewalldb = self.db_mongo_client['Client_Strategy_Status']['Client_Strategy_Status']
         # Create consumer group for input stream
         await self.create_consumer_group(self.error_stream)
 
@@ -245,7 +249,9 @@ class ExecErrorProcessor:
                     message = error_data['message']
                     order_data = json.loads(error_data['order_data'])
                     await self.logger.info(f'Error from Executor_Client: {message} in order : {order_data}')
+                    
                     await self.close_exec_gate(order_data)
+                    await self.logger.info(f'Closing execution gate for order: {order_data}')
                     await self.log_error_order(order_data, message)
                     await self.send_alarm(order_data,message)
                     await self.stream_redis.xack(self.error_stream, self.consumer_group, message_id)
@@ -258,30 +264,34 @@ class ExecErrorProcessor:
                     await self.stream_redis.xack(self.error_stream, self.consumer_group, message_id)
                     await self.logger.info(f"Processed error: {message} for pending order: {pending_data}")
                 
-                elif 'AlgoSignalValidationError' in error_data:
-                    message = error_data['message']
-                    order_data:dict = json.loads(error_data['algo_signal'])
-                    client_action_map:dict = await self.stream_redis.hgetall(f'client_action_map: {order_data["algoName"]}')
-                    await self.logger.info(f'Error from Executor_RMS: {message} in signal : {order_data}')
-                    for client_id, status in client_action_map.items():
-                        if status == '1':
-                            temp_order_data = order_data.copy()
-                            temp_order_data['clientID'] = client_id
-                            await self.close_exec_gate(order_data)
-                            await self.log_error_order(order_data, message)
-                    await self.stream_redis.xack(self.error_stream, self.consumer_group, message_id)
-                    await self.logger.info(f"Processed error: {message} for signal: {order_data}")
+                elif 'error_type' in error_data:
+                    if error_data['error_type'] == 'AlgoSignalValidationError':
+                        message = error_data['message']
+                        order_data:dict = json.loads(error_data['algo_signal'])
+                        client_action_map:dict = await self.stream_redis.hgetall(f'client_action_map: {order_data["algoName"]}')
+                        await self.logger.info(f'Client action map: {client_action_map}')
+                        await self.logger.info(f'Error from Executor_RMS: {message} in algo signal : {order_data}')
+                        # await self.firewalldb.update_many({'algoname': order_data['algoName']}, {'$set':{'Start_Stop':"STOP"}})
+                        
+                        for client_id, status in client_action_map.items():
+                            if status == '1':
+                                temp_order_data = order_data.copy()
+                                temp_order_data['clientID'] = client_id
+                                await self.close_exec_gate(temp_order_data)
+                                await self.log_error_order(temp_order_data, message)
+                        await self.stream_redis.xack(self.error_stream, self.consumer_group, message_id)
+                        await self.logger.info(f"Processed error: {message} for signal: {order_data}")
+                    
+                    elif error_data['error_type'] == 'ClientOrderValidationError':
+                        message = error_data['message']
+                        order_data = json.loads(error_data['client_order'])
+                        await self.logger.info(f'Error from Executor_RMS: {message} in order : {order_data}')
+                        await self.close_exec_gate(order_data)
+                        await self.log_error_order(order_data, message)
+                        await self.send_alarm(order_data,message)
+                        await self.stream_redis.xack(self.error_stream, self.consumer_group, message_id)
+                        await self.logger.info(f"Processed error: {message} for order: {order_data}")
                 
-                elif 'ClientOrderValidationError' in error_data:
-                    message = error_data['message']
-                    order_data = json.loads(error_data['client_order'])
-                    await self.logger.info(f'Error from Executor_RMS: {message} in order : {order_data}')
-                    await self.close_exec_gate(order_data)
-                    await self.log_error_order(order_data, message)
-                    await self.send_alarm(order_data,message)
-                    await self.stream_redis.xack(self.error_stream, self.consumer_group, message_id)
-                    await self.logger.info(f"Processed error: {message} for order: {order_data}")
-            
             except Exception as e: 
                 await self.logger.exception(f"Error processing message {message_id}: {str(e)}")
                 # Acknowledge the message even if processing fails
@@ -306,6 +316,18 @@ class ExecErrorProcessor:
             # Acknowledge the message even if processing fails
             await self.stream_redis.xack(self.error_stream, self.consumer_group, order_data['message_id'])
             return
+        
+    async def get_symbol(self, exchange_instrument_id: str, exchange_segment: str) -> str:
+        try:
+            symbol = await self.sym_redis.get(f"{exchange_instrument_id}_{exchange_segment}")
+            if not symbol:
+                await self.logger.warning(f"Symbol not found for {exchange_instrument_id}_{exchange_segment}")
+                return 'Not Found'
+            return symbol
+        except Exception as e:
+            await self.logger.exception(f"Error getting symbol: {str(e)}")
+            # Acknowledge the message even if processing fails
+            return 'Not Found'
 
     async def log_error_order(self, order_data: dict, message: str):
         """
@@ -315,11 +337,14 @@ class ExecErrorProcessor:
             order_data: The order data to log
         """
         try:
+            symbol = order_data.get('symbol')
+            if 'symbol' not in order_data:
+                symbol = await self.get_symbol(order_data['exchangeInstrumentID'], order_data['exchangeSegment'])
             await self.logger.info(f"Logging error order: {order_data}")
             final_post = {
                 'quantity': order_data['orderQuantity'],
                 'algoname': order_data['algoName'],
-                'symbol': order_data['symbol'],
+                'symbol': symbol,
                 'exchangeInstrumentID': order_data['exchangeInstrumentID'],
                 'exchangeSegment': order_data['exchangeSegment'],
                 'buy_sell': order_data['orderSide'],
@@ -329,7 +354,7 @@ class ExecErrorProcessor:
                 'cancelrejectreason': f'M&M RMS: {message}',
                 'OrderAverageTradedPrice': 0,
                 'clientID': order_data['clientID'],
-                'OrderUniqueIdentifier': order_data['orderUniqueIdentifier'],
+                'OrderUniqueIdentifier': f'ErrorOrder_{token_hex(5)}',
                 'orderSentTime':time.time(),
                 'orderType':order_data['orderType']
             }
@@ -351,9 +376,10 @@ class ExecErrorProcessor:
         try: 
             client = order_data['clientID']
             algo = order_data['algoName']
-            await self.logger.info(f"Closing execution gate for client {client} and algo {algo}")
-            redis_key = f'client_action_map: {algo}'
-            await self.stream_redis.hset(redis_key, client, 0)
+            await self.algo_redis.set(f'{algo}_{client}',json.dumps({'action':"Stop"}))
+            # await self.logger.info(f"Closing execution gate for client {client} and algo {algo}")
+            # redis_key = f'client_action_map: {algo}'
+            # await self.stream_redis.hset(redis_key, client, 0)
             await self.logger.info(f"Closed execution gate for client {client} and algo {algo}")
         except Exception as e:
             await self.logger.exception(f"Error closing execution gate: {str(e)}")
@@ -405,7 +431,7 @@ class ExecErrorProcessor:
                                 await self.logger.error(f"Invalid JSON in message: {fields['data']}")
                                 await self.stream_redis.xack(self.error_stream, self.consumer_group, message_id)
                                 continue
-                        
+                        else: error_data = fields
 
                         # Start processing task
                         task = asyncio.create_task(self.process_error(message_id, error_data))

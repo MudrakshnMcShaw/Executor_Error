@@ -4,4 +4,5 @@ dnspython==2.6.1
 motor==3.6.1
 pymongo==4.9.2
 redis==5.2.1
-typing-extensions==4.13.2
+typing_extensions==4.13.2
+uvloop==0.21.0

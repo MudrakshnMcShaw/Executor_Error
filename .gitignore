@@ -2,3 +2,4 @@ venv
 *.log
 *.sh
 *.ini
+*.pyc
