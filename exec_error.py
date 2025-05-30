@@ -298,7 +298,7 @@ class ExecErrorProcessor:
                 await self.stream_redis.xack(self.error_stream, self.consumer_group, message_id)
                 return
             
-    async def send_alarm(self, order_data: dict, message: str):
+    async def send_alarm(self, order_data: dict, message: str, alarm:str = 'reject_rms'):
         """
         Send an alarm for the error.
         
@@ -308,7 +308,7 @@ class ExecErrorProcessor:
         """
         try:
             await self.logger.info(f"Sending alarm for error: {message}")
-            await self.ping_redis.rpush('alarms-0', 'reject-rms')
+            await self.ping_redis.rpush('alarms-0', alarm)
            
             await self.logger.info(f"Alarm sent for error: {message}")
         except Exception as e:
