@@ -13,6 +13,7 @@ import time
 from secrets import token_hex
 import random
 import uvloop
+from urllib.parse import quote_plus
 
 # Use uvloop for better performance
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
@@ -91,6 +92,8 @@ class ExecErrorProcessor:
             mongo_user = self.config['infraParams']['mongoUser']
             mongo_pass = self.config['infraParams']['mongoPass']
 
+            mongo_user = quote_plus(mongo_user)  # URL encode username
+            mongo_pass = quote_plus(mongo_pass)  # URL encode password
             # Construct MongoDB URI
             mongo_uri = f"mongodb://{mongo_user}:{mongo_pass}@{mongo_host}:{mongo_port}/"
             
@@ -119,6 +122,7 @@ class ExecErrorProcessor:
         self.db_mongo_client = await self.get_mongo_conn()
         self.orders_db = self.db_mongo_client['symphonyorder_raw'][f'orders_{str(datetime.date.today())}']
         self.response_db = self.db_mongo_client['final_response'][f'final_response_{str(datetime.date.today())}']
+        self.monitor_db = self.db_mongo_client['algo_status'][f'algo_message']
         self.firewalldb = self.db_mongo_client['Client_Strategy_Status']['Client_Strategy_Status']
         # Create consumer group for input stream
         await self.create_consumer_group(self.error_stream)
@@ -249,7 +253,6 @@ class ExecErrorProcessor:
                     message = error_data['message']
                     order_data = json.loads(error_data['order_data'])
                     await self.logger.info(f'Error from Executor_Client: {message} in order : {order_data}')
-                    
                     await self.close_exec_gate(order_data)
                     await self.logger.info(f'Closing execution gate for order: {order_data}')
                     await self.log_error_order(order_data, message)
@@ -268,6 +271,7 @@ class ExecErrorProcessor:
                     if error_data['error_type'] == 'AlgoSignalValidationError':
                         message = error_data['message']
                         order_data:dict = json.loads(error_data['algo_signal'])
+                        if 'algoName' not in order_data:  order_data['algoName'] = order_data.get('algoName', 'UnknownAlgo')
                         client_action_map:dict = await self.stream_redis.hgetall(f'client_action_map: {order_data["algoName"]}')
                         await self.logger.info(f'Client action map: {client_action_map}')
                         await self.logger.info(f'Error from Executor_RMS: {message} in algo signal : {order_data}')
@@ -359,6 +363,7 @@ class ExecErrorProcessor:
                 'orderType':order_data['orderType']
             }
             await self.response_db.insert_one(final_post)
+            await self.monitor_db.insert_one({'executor': f"{order_data['algoName']}_{order_data['clientID']}", 'type': 'error','message': message, 'time_stamp': str(datetime.datetime.now())})
             await self.logger.info(f"Logged error order: {final_post}")
         except Exception as e:
             await self.logger.exception(f"Error logging order: {str(e)}")
