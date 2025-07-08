@@ -271,7 +271,13 @@ class ExecErrorProcessor:
                     if error_data['error_type'] == 'AlgoSignalValidationError':
                         message = error_data['message']
                         order_data:dict = json.loads(error_data['algo_signal'])
-                        if 'algoName' not in order_data:  order_data['algoName'] = order_data.get('algoName', 'UnknownAlgo')
+                        if 'algoName' not in order_data:  
+                            order_data['algoName'] = 'UnknownAlgo'
+                            order_data['clientID'] = 'UnknownClient'
+                            await self.log_error_order(temp_order_data, message)
+                            await self.send_alarm(order_data, message='AlgoName not found')
+                            return 
+                        
                         client_action_map:dict = await self.stream_redis.hgetall(f'client_action_map: {order_data["algoName"]}')
                         await self.logger.info(f'Client action map: {client_action_map}')
                         await self.logger.info(f'Error from Executor_RMS: {message} in algo signal : {order_data}')
@@ -283,6 +289,8 @@ class ExecErrorProcessor:
                                 temp_order_data['clientID'] = client_id
                                 await self.close_exec_gate(temp_order_data)
                                 await self.log_error_order(temp_order_data, message)
+                                
+                        await self.send_alarm(order_data,message)
                         await self.stream_redis.xack(self.error_stream, self.consumer_group, message_id)
                         await self.logger.info(f"Processed error: {message} for signal: {order_data}")
                     
