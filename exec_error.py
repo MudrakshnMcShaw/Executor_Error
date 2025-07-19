@@ -274,7 +274,9 @@ class ExecErrorProcessor:
                         if 'algoName' not in order_data:  
                             order_data['algoName'] = 'UnknownAlgo'
                             order_data['clientID'] = 'UnknownClient'
-                            await self.log_error_order(temp_order_data, message)
+                            await self.log_error_order(order_data, message)
+                            await self.stream_redis.xack(self.error_stream, self.consumer_group, message_id)
+                            await self.logger.info(f"Processed error: {message} for order: {order_data}")
                             await self.send_alarm(order_data, message='AlgoName not found')
                             return 
                         
