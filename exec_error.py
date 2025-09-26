@@ -453,6 +453,22 @@ class ExecErrorProcessor:
                         self.tasks.add(task)
                         task.add_done_callback(self.tasks.discard)
                 
+            except aioredis.ResponseError as e:
+                error_msg = str(e).upper()
+                if any(keyword in error_msg for keyword in ['NOGROUP', 'NOSTREAM']):
+                    await self.logger.error(f"Stream or consumer group missing: {str(e)}")
+                    await self.logger.info("Attempting to recreate consumer group...")
+                    try:
+                        await self.create_consumer_group(self.error_stream)
+                        await self.logger.info("Consumer group recreated successfully")
+                    except Exception as recreate_error:
+                        await self.logger.exception(f"Failed to recreate consumer group: {recreate_error}")
+                        # Implement exponential backoff to prevent tight loops
+                        await asyncio.sleep(10)
+                else:
+                    await self.logger.exception(f"Redis response error: {str(e)}")
+                    await asyncio.sleep(5)
+            
             except asyncio.CancelledError:
                 await self.logger.info("Order listener cancelled")
                 break
