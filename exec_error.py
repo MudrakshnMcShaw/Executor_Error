@@ -280,7 +280,7 @@ class ExecErrorProcessor:
                             await self.send_alarm(order_data, message='AlgoName not found')
                             return 
                         
-                        client_action_map:dict = await self.stream_redis.hgetall(f'client_action_map: {order_data["algoName"]}')
+                        client_action_map:dict = await self.stream_redis.hgetall(f'client_action_map: {order_data.get("ipad_name","overnight")}: {order_data["algoName"]}')
                         await self.logger.info(f'Client action map: {client_action_map}')
                         await self.logger.info(f'Error from Executor_RMS: {message} in algo signal : {order_data}')
                         # await self.firewalldb.update_many({'algoname': order_data['algoName']}, {'$set':{'Start_Stop':"STOP"}})
@@ -370,10 +370,12 @@ class ExecErrorProcessor:
                 'clientID': order_data['clientID'],
                 'OrderUniqueIdentifier': f'ErrorOrder_{token_hex(5)}',
                 'orderSentTime':time.time(),
-                'orderType':order_data['orderType']
+                'orderType':order_data['orderType'],
+                'retry': False,
+                'ipad_name': order_data.get('ipad_name','overnight')
             }
             await self.response_db.insert_one(final_post)
-            await self.monitor_db.insert_one({'executor': f"{order_data['algoName']}_{order_data['clientID']}", 'type': 'error','message': message, 'time_stamp': str(datetime.datetime.now())})
+            await self.monitor_db.insert_one({'executor': f"{order_data['algoName']}_{order_data.get('ipad_name','overnight')}_{order_data['clientID']}", 'type': 'error','message': message, 'time_stamp': str(datetime.datetime.now()), 'ipad_name': order_data.get('ipad_name','overnight')})
             await self.logger.info(f"Logged error order: {final_post}")
         except Exception as e:
             await self.logger.exception(f"Error logging order: {str(e)}")
@@ -391,11 +393,12 @@ class ExecErrorProcessor:
         try: 
             client = order_data['clientID']
             algo = order_data['algoName']
-            await self.algo_redis.set(f'{algo}_{client}',json.dumps({'action':"Stop"}))
+            ipad_name = order_data.get('ipad_name','overnight')
+            await self.algo_redis.set(f'{algo}_{ipad_name}_{client}',json.dumps({'action':"Stop"}))
             # await self.logger.info(f"Closing execution gate for client {client} and algo {algo}")
             # redis_key = f'client_action_map: {algo}'
             # await self.stream_redis.hset(redis_key, client, 0)
-            await self.logger.info(f"Closed execution gate for client {client} and algo {algo}")
+            await self.logger.info(f"Closed execution gate for client {client} and algo {algo} and ipad {ipad_name}")
         except Exception as e:
             await self.logger.exception(f"Error closing execution gate: {str(e)}")
             # Acknowledge the message even if processing fails
