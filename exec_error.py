@@ -323,6 +323,7 @@ class ExecErrorProcessor:
         try:
             await self.logger.info(f"Sending alarm for error: {message}")
             await self.ping_redis.rpush('alarms-0', alarm)
+            await self.ping_redis.rpush('alarms-v2', alarm)
            
             await self.logger.info(f"Alarm sent for error: {message}")
         except Exception as e:
