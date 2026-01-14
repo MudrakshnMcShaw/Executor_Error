@@ -115,7 +115,7 @@ class ExecErrorProcessor:
         self.stream_redis = await self.get_redis_conn(db=12, key='infraParams')
         self.algo_redis = await self.get_redis_conn(db=8, key='infraParams')
         self.ping_redis = await self.get_redis_conn(db=9, key='infraParams')
-
+        await self.ping_redis.rpush('alarms-v2', 'exec_error_start')
         self.logger = RedisStreamLogger(self.stream_redis, self.logging_stream)
         self.logger.added_packets.update({'consumer_group': self.consumer_group, 'consumer_name': self.consumer_name})
         
