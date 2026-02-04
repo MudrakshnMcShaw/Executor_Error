@@ -1,0 +1,22 @@
+[dbParams]
+redisHost = 
+redisPort = 
+redisPass = 
+mongoHost = 
+mongoPort = 
+mongoPass = 
+mongoUser = 
+
+[infraParams]
+redisHost = 
+redisPort = 
+redisPass = 
+mongoHost = 
+mongoPort = 
+mongoPass = 
+mongoUser = 
+
+[params]
+processing_concurrency = 10
+error_stream = Error_Stream
+logging_stream = Logging_Stream
