@@ -3,3 +3,4 @@ venv
 *.sh
 *.ini
 *.pyc
+!boot.sh
