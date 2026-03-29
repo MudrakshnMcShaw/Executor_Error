@@ -251,11 +251,12 @@ class ExecErrorProcessor:
                 
                 if 'order_data' in error_data:
                     message = error_data['message']
+                    rejection_type = error_data.get('rejection_type', 'hard')
                     order_data = json.loads(error_data['order_data'])
                     await self.logger.info(f'Error from Executor_Client: {message} in order : {order_data}')
                     await self.close_exec_gate(order_data)
                     await self.logger.info(f'Closing execution gate for order: {order_data}')
-                    await self.log_error_order(order_data, message)
+                    await self.log_error_order(order_data, message, rejection_type)
                     await self.send_alarm(order_data,message)
                     await self.stream_redis.xack(self.error_stream, self.consumer_group, message_id)
                     await self.logger.info(f"Processed error: {message} for order: {order_data}")
@@ -343,7 +344,7 @@ class ExecErrorProcessor:
             # Acknowledge the message even if processing fails
             return 'Not Found'
 
-    async def log_error_order(self, order_data: dict, message: str):
+    async def log_error_order(self, order_data: dict, message: str, rejection_type: str = 'hard'):
         """
         Log the error order to the database.
         
@@ -375,7 +376,8 @@ class ExecErrorProcessor:
                 'ipad_name': order_data.get('ipad_name','overnight')
             }
             await self.response_db.insert_one(final_post)
-            await self.monitor_db.insert_one({'executor': f"{order_data['algoName']}_{order_data.get('ipad_name','overnight')}_{order_data['clientID']}", 'type': 'error','message': message, 'time_stamp': str(datetime.datetime.now()), 'ipad_name': order_data.get('ipad_name','overnight')})
+            if rejection_type == 'hard':
+                await self.monitor_db.insert_one({'executor': f"{order_data['algoName']}_{order_data.get('ipad_name','overnight')}_{order_data['clientID']}", 'type': 'error','message': message, 'time_stamp': str(datetime.datetime.now()), 'ipad_name': order_data.get('ipad_name','overnight')})
             await self.logger.info(f"Logged error order: {final_post}")
         except Exception as e:
             await self.logger.exception(f"Error logging order: {str(e)}")
